@@ -10,7 +10,8 @@
         }
 
         #groups button,
-        #like-data-controls button {
+        #like-data-controls button,
+        #stats-table button {
             background-color: #666666;
             border: 1px solid #888888;
             color: #ffffff;
@@ -20,7 +21,8 @@
         }
 
         #groups button:hover,
-        #like-data-controls button:hover {
+        #like-data-controls button:hover,
+        #stats-table button:hover {
             background-color: #808080;
         }
 
@@ -138,6 +140,7 @@
                 <th>Liked</th>
                 <th>Total</th>
                 <th>Percent</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody id="stats-table-body"></tbody>
@@ -361,6 +364,14 @@
 
             var assetPackStats = computeAssetPackStats();
 
+            function buildPackGallery(packNumber) {
+                return galleries.reduce(function (acc, gallery) {
+                    return acc.concat(gallery.filter(function (item) {
+                        return item.assetPackNumber === packNumber;
+                    }));
+                }, []);
+            }
+
             function renderStats() {
                 // Percent recomputed from live counts, not cached, so re-sort always reflects current state.
                 var sorted = assetPackStats.slice().sort(function (a, b) {
@@ -397,11 +408,21 @@
                     var percent = stat.total > 0 ? (stat.liked / stat.total) * 100 : 0;
                     percentCell.textContent = percent.toFixed(1) + "%";
 
+                    var actionsCell = document.createElement("td");
+                    var showBtn = document.createElement("button");
+                    showBtn.type = "button";
+                    showBtn.textContent = "Show";
+                    showBtn.addEventListener("click", function () {
+                        showPackGallery(stat.number);
+                    });
+                    actionsCell.appendChild(showBtn);
+
                     row.appendChild(placeCell);
                     row.appendChild(nameCell);
                     row.appendChild(likedCell);
                     row.appendChild(totalCell);
                     row.appendChild(percentCell);
+                    row.appendChild(actionsCell);
 
                     statsTableBody.appendChild(row);
                 });
@@ -542,13 +563,21 @@
 
             importCancelBtn.addEventListener("click", closeImportArea);
 
+            var GALLERY_MODE_CATEGORY = "category";
+            var GALLERY_MODE_PACK = "pack";
+
+            var activeGalleryMode = GALLERY_MODE_CATEGORY;
             var activeGalleryIndex = 0;
+            var activeItems = galleries[0];
             var slide = 0;
             var controls = {};
             var spotlightOpen = false;
 
-            var controlDefs = [
-                { key: "like", handler: toggleLike, label: "Toggle favorite" },
+            var likeControlDef = { key: "like", handler: toggleLike, label: "Toggle favorite" };
+
+            // Superset used for cleanup on close; ensureControl/removeControl no-op for keys never added.
+            var galleryControlDefs = [
+                likeControlDef,
                 {
                     key: "gallery-down",
                     handler: function () {
@@ -564,6 +593,7 @@
                     label: "Previous gallery"
                 }
             ];
+            var packControlDefs = [likeControlDef];
 
             function ensureControl(key, handler, label) {
                 if (!controls[key]) {
@@ -582,16 +612,15 @@
                     return;
                 }
 
-                var currentItem = galleries[activeGalleryIndex][slide];
+                var currentItem = activeItems[slide];
                 likeControl.classList.toggle("on", !!(currentItem && currentItem.like));
             }
 
-            function showGallery(galleryIndex, startSlide) {
-                activeGalleryIndex = (galleryIndex + galleries.length) % galleries.length;
-                slide = startSlide || 0;
+            function openSpotlightGallery(startSlide, activeControlDefs) {
+                slide = startSlide;
                 var wasOpen = !!document.querySelector("#spotlight.show");
 
-                Spotlight.show(galleries[activeGalleryIndex], {
+                Spotlight.show(activeItems, {
                     control: ["page", "fullscreen", "zoom-in", "zoom-out", "close", "prev", "next"],
                     infinite: false,
                     spinner: true,
@@ -604,21 +633,23 @@
                     onshow: function () {
                         spotlightOpen = true;
 
-                        controlDefs.forEach(function (def) {
+                        activeControlDefs.forEach(function (def) {
                             ensureControl(def.key, def.handler, def.label);
                         });
 
                         if (wasOpen) {
                             var currentImage = document.querySelector("#spotlight .spl-pane img");
                             if (currentImage) {
-                                currentImage.src = galleries[activeGalleryIndex][slide].src;
+                                currentImage.src = activeItems[slide].src;
                             }
                         }
                     },
                     onchange: function (index) {
                         slide = index - 1;
                         syncLikeState();
-                        updateUrlParams();
+                        if (activeGalleryMode === GALLERY_MODE_CATEGORY) {
+                            updateUrlParams();
+                        }
                     },
                     onclose: function () {
                         spotlightOpen = false;
@@ -628,12 +659,27 @@
                             document.querySelector("#spotlight .spl-header").appendChild(controls["gallery-down"]);
                         }
 
-                        controlDefs.forEach(function (def) {
-                            Spotlight.removeControl(def.key);
-                            controls[def.key] = null;
+                        galleryControlDefs.forEach(function (def) {
+                            if (controls[def.key]) {
+                                Spotlight.removeControl(def.key);
+                                controls[def.key] = null;
+                            }
                         });
                     }
                 });
+            }
+
+            function showGallery(galleryIndex, startSlide) {
+                activeGalleryMode = GALLERY_MODE_CATEGORY;
+                activeGalleryIndex = (galleryIndex + galleries.length) % galleries.length;
+                activeItems = galleries[activeGalleryIndex];
+                openSpotlightGallery(startSlide || 0, galleryControlDefs);
+            }
+
+            function showPackGallery(packNumber) {
+                activeGalleryMode = GALLERY_MODE_PACK;
+                activeItems = buildPackGallery(packNumber);
+                openSpotlightGallery(0, packControlDefs);
             }
 
             function updateUrlParams() {
@@ -684,8 +730,7 @@
             }
 
             function toggleLike() {
-                var gallery = galleries[activeGalleryIndex];
-                var item = gallery[slide];
+                var item = activeItems[slide];
                 item.like = !item.like;
 
                 if (item.like) {
@@ -712,6 +757,17 @@
                     return;
                 }
 
+                if (event.keyCode === 70) {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    toggleLike();
+                    return;
+                }
+
+                if (activeGalleryMode !== GALLERY_MODE_CATEGORY) {
+                    return;
+                }
+
                 if (event.keyCode === 38) {
                     event.preventDefault();
                     event.stopImmediatePropagation();
@@ -720,10 +776,6 @@
                     event.preventDefault();
                     event.stopImmediatePropagation();
                     showGallery(activeGalleryIndex + 1);
-                } else if (event.keyCode === 70) {
-                    event.preventDefault();
-                    event.stopImmediatePropagation();
-                    toggleLike();
                 }
             }, true);
 
